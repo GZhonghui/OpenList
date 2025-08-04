@@ -45,9 +45,17 @@ func (d *Dropbox) Init(ctx context.Context) error {
 	if result != query {
 		return fmt.Errorf("failed to check user: %s", string(res))
 	}
-	d.RootNamespaceId, err = d.GetRootNamespaceId(ctx)
 
-	return err
+	if d.UseAppFolder {
+		d.RootNamespaceId = ""
+	} else {
+		d.RootNamespaceId, err = d.GetRootNamespaceId(ctx)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (d *Dropbox) GetRootNamespaceId(ctx context.Context) (string, error) {

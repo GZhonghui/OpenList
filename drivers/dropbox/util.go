@@ -75,14 +75,22 @@ func (d *Dropbox) request(uri, method string, callback base.ReqCallback, retry .
 	req := base.RestyClient.R()
 	req.SetHeader("Authorization", "Bearer "+d.AccessToken)
 	if d.RootNamespaceId != "" {
+		var pathRootTag string
+		if d.UseAppFolder {
+			pathRootTag = "namespace_id" // App Folder模式
+		} else {
+			pathRootTag = "root" // Full Dropbox模式
+		}
 		apiPathRootJson, err := utils.Json.MarshalToString(map[string]interface{}{
-			".tag": "root",
+			".tag": pathRootTag,
 			"root": d.RootNamespaceId,
 		})
 		if err != nil {
 			return nil, err
 		}
-		req.SetHeader("Dropbox-API-Path-Root", apiPathRootJson)
+		if !d.UseAppFolder {
+			req.SetHeader("Dropbox-API-Path-Root", apiPathRootJson)
+		}
 	}
 	if callback != nil {
 		callback(req)

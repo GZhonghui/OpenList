@@ -11,6 +11,7 @@ type Addition struct {
 	APIAddress      string `json:"api_url_address" default:"https://api.oplist.org/dropboxs/renewapi"`
 	ClientID        string `json:"client_id" required:"false" help:"Keep it empty if you don't have one"`
 	ClientSecret    string `json:"client_secret" required:"false" help:"Keep it empty if you don't have one"`
+	UseAppFolder    bool   `json:"use_app_folder" default:"false" help:"Use app folder instead of root folder"`
 	AccessToken     string
 	RefreshToken    string `json:"refresh_token" required:"true"`
 	RootNamespaceId string
