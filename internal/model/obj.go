@@ -2,7 +2,6 @@ package model
 
 import (
 	"io"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -40,16 +39,16 @@ type FileStreamer interface {
 	utils.ClosersIF
 	Obj
 	GetMimetype() string
-	//SetReader(io.Reader)
 	NeedStore() bool
 	IsForceStreamUpload() bool
 	GetExist() Obj
 	SetExist(Obj)
-	//for a non-seekable Stream, RangeRead supports peeking some data, and CacheFullInTempFile still works
+	// for a non-seekable Stream, RangeRead supports peeking some data, and CacheFullAndWriter still works
 	RangeRead(http_range.Range) (io.Reader, error)
-	//for a non-seekable Stream, if Read is called, this function won't work
-	CacheFullInTempFile() (File, error)
-	SetTmpFile(r *os.File)
+	// for a non-seekable Stream, if Read is called, this function won't work.
+	// caches the full Stream and writes it to writer (if provided, even if the stream is already cached).
+	CacheFullAndWriter(up *UpdateProgress, writer io.Writer) (File, error)
+	// if the Stream is not a File and is not cached, returns nil.
 	GetFile() File
 }
 
@@ -78,6 +77,10 @@ type Thumb interface {
 
 type SetPath interface {
 	SetPath(path string)
+}
+
+type ObjWithProvider interface {
+	GetProvider() string
 }
 
 func SortFiles(objs []Obj, orderBy, orderDirection string) {
@@ -134,50 +137,55 @@ func WrapObjName(objs Obj) Obj {
 }
 
 func WrapObjsName(objs []Obj) {
-	for i := 0; i < len(objs); i++ {
+	for i := range objs {
 		objs[i] = &ObjWrapName{Name: utils.MappingName(objs[i].GetName()), Obj: objs[i]}
 	}
 }
 
-func UnwrapObj(obj Obj) Obj {
-	if unwrap, ok := obj.(ObjUnwrap); ok {
-		obj = unwrap.Unwrap()
+func UnwrapObjName(obj Obj) Obj {
+	if n, ok := obj.(*ObjWrapName); ok {
+		return n.Obj
 	}
 	return obj
 }
 
 func GetThumb(obj Obj) (thumb string, ok bool) {
-	if obj, ok := obj.(Thumb); ok {
-		return obj.Thumb(), true
+	for {
+		switch o := obj.(type) {
+		case Thumb:
+			return o.Thumb(), true
+		case ObjUnwrap:
+			obj = o.Unwrap()
+		default:
+			return
+		}
 	}
-	if unwrap, ok := obj.(ObjUnwrap); ok {
-		return GetThumb(unwrap.Unwrap())
-	}
-	return thumb, false
 }
 
 func GetUrl(obj Obj) (url string, ok bool) {
-	if obj, ok := obj.(URL); ok {
-		return obj.URL(), true
+	for {
+		switch o := obj.(type) {
+		case URL:
+			return o.URL(), true
+		case ObjUnwrap:
+			obj = o.Unwrap()
+		default:
+			return
+		}
 	}
-	if unwrap, ok := obj.(ObjUnwrap); ok {
-		return GetUrl(unwrap.Unwrap())
-	}
-	return url, false
 }
 
-func GetRawObject(obj Obj) *Object {
-	switch v := obj.(type) {
-	case *ObjThumbURL:
-		return &v.Object
-	case *ObjThumb:
-		return &v.Object
-	case *ObjectURL:
-		return &v.Object
-	case *Object:
-		return v
+func GetProvider(obj Obj) (string, bool) {
+	for {
+		switch o := obj.(type) {
+		case ObjWithProvider:
+			return o.GetProvider(), true
+		case ObjUnwrap:
+			obj = o.Unwrap()
+		default:
+			return "unknown", false
+		}
 	}
-	return nil
 }
 
 // Merge
@@ -226,4 +234,55 @@ func (om *ObjMerge) InitHideReg(hides string) {
 
 func (om *ObjMerge) Reset() {
 	om.set.Clear()
+}
+
+type ObjMask uint8
+
+const (
+	Virtual ObjMask = 1 << iota
+	Temp
+)
+
+type maskObj struct {
+	Obj
+	mask ObjMask
+}
+
+func (m *maskObj) Unwrap() Obj {
+	return m.Obj
+}
+
+func getMaskObj(obj Obj) *maskObj {
+	for {
+		switch o := obj.(type) {
+		case *maskObj:
+			return o
+		case ObjUnwrap:
+			obj = o.Unwrap()
+		default:
+			return nil
+		}
+	}
+}
+func ObjHasMask(obj Obj, mask ObjMask) bool {
+	if m := getMaskObj(obj); m != nil {
+		return m.mask&mask == mask
+	}
+	return false
+}
+func ObjAddMask(obj Obj, mask ObjMask) Obj {
+	if mask == 0 {
+		return obj
+	}
+	if m := getMaskObj(obj); m != nil {
+		m.mask |= mask
+		return obj
+	}
+	return &maskObj{Obj: obj, mask: mask}
+}
+func GetObjMask(obj Obj) ObjMask {
+	if m := getMaskObj(obj); m != nil {
+		return m.mask
+	}
+	return 0
 }

@@ -149,12 +149,18 @@ func (d *QuarkOrUC) getTranscodingLink(file model.Obj) (*model.Link, error) {
 		return nil, err
 	}
 
-	return &model.Link{
-		URL:           resp.Data.VideoList[0].VideoInfo.URL,
-		ContentLength: resp.Data.VideoList[0].VideoInfo.Size,
-		Concurrency:   3,
-		PartSize:      10 * utils.MB,
-	}, nil
+	for _, info := range resp.Data.VideoList {
+		if info.VideoInfo.URL != "" {
+			return &model.Link{
+				URL:           info.VideoInfo.URL,
+				ContentLength: info.VideoInfo.Size,
+				Concurrency:   3,
+				PartSize:      10 * utils.MB,
+			}, nil
+		}
+	}
+
+	return nil, errors.New("no link found")
 }
 
 func (d *QuarkOrUC) upPre(file model.FileStreamer, parentId string) (UpPreResp, error) {
@@ -192,7 +198,7 @@ func (d *QuarkOrUC) upHash(md5, sha1, taskId string) (bool, error) {
 }
 
 func (d *QuarkOrUC) upPart(ctx context.Context, pre UpPreResp, mineType string, partNumber int, bytes io.Reader) (string, error) {
-	//func (driver QuarkOrUC) UpPart(pre UpPreResp, mineType string, partNumber int, bytes []byte, account *model.Account, md5Str, sha1Str string) (string, error) {
+	// func (driver QuarkOrUC) UpPart(pre UpPreResp, mineType string, partNumber int, bytes []byte, account *model.Account, md5Str, sha1Str string) (string, error) {
 	timeStr := time.Now().UTC().Format(http.TimeFormat)
 	data := base.Json{
 		"auth_info": pre.Data.AuthInfo,
@@ -223,25 +229,30 @@ x-oss-user-agent:aliyun-sdk-js/6.6.1 Chrome 98.0.4758.80 on Windows 10 64-bit
 	//	}
 	//}
 	u := fmt.Sprintf("https://%s.%s/%s", pre.Data.Bucket, pre.Data.UploadUrl[7:], pre.Data.ObjKey)
-	res, err := base.RestyClient.R().SetContext(ctx).
-		SetHeaders(map[string]string{
-			"Authorization":    resp.Data.AuthKey,
-			"Content-Type":     mineType,
-			"Referer":          "https://pan.quark.cn/",
-			"x-oss-date":       timeStr,
-			"x-oss-user-agent": "aliyun-sdk-js/6.6.1 Chrome 98.0.4758.80 on Windows 10 64-bit",
-		}).
-		SetQueryParams(map[string]string{
-			"partNumber": strconv.Itoa(partNumber),
-			"uploadId":   pre.Data.UploadId,
-		}).SetBody(bytes).Put(u)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u, bytes)
 	if err != nil {
 		return "", err
 	}
-	if res.StatusCode() != 200 {
-		return "", fmt.Errorf("up status: %d, error: %s", res.StatusCode(), res.String())
+	req.Header.Set("Authorization", resp.Data.AuthKey)
+	req.Header.Set("Content-Type", mineType)
+	req.Header.Set("Referer", "https://pan.quark.cn/")
+	req.Header.Set("x-oss-date", timeStr)
+	req.Header.Set("x-oss-user-agent", "aliyun-sdk-js/6.6.1 Chrome 98.0.4758.80 on Windows 10 64-bit")
+	q := req.URL.Query()
+	q.Add("partNumber", strconv.Itoa(partNumber))
+	q.Add("uploadId", pre.Data.UploadId)
+	req.URL.RawQuery = q.Encode()
+	res, err := base.HttpClient.Do(req)
+	if err != nil {
+		return "", err
 	}
-	return res.Header().Get("Etag"), nil
+	defer res.Body.Close()
+
+	if res.StatusCode != 200 {
+		respBody, _ := io.ReadAll(res.Body)
+		return "", fmt.Errorf("up status: %d, error: %s", res.StatusCode, string(respBody))
+	}
+	return res.Header.Get("Etag"), nil
 }
 
 func (d *QuarkOrUC) upCommit(pre UpPreResp, md5s []string) error {
@@ -327,4 +338,21 @@ func (d *QuarkOrUC) upFinish(pre UpPreResp) error {
 	}
 	time.Sleep(time.Second)
 	return nil
+}
+
+func (d *QuarkOrUC) memberInfo(ctx context.Context) (*MemberResp, error) {
+	var resp MemberResp
+	query := map[string]string{
+		"fetch_subscribe": "false",
+		"_ch":             "home",
+		"fetch_identity":  "false",
+	}
+	_, err := d.request("/member", http.MethodGet, func(req *resty.Request) {
+		req.SetQueryParams(query)
+		req.SetContext(ctx)
+	}, &resp)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }

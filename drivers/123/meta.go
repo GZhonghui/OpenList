@@ -11,7 +11,9 @@ type Addition struct {
 	driver.RootID
 	//OrderBy        string `json:"order_by" type:"select" options:"file_id,file_name,size,update_at" default:"file_name"`
 	//OrderDirection string `json:"order_direction" type:"select" options:"asc,desc" default:"asc"`
-	AccessToken string
+	AccessToken  string
+	UploadThread int    `json:"UploadThread" type:"number" default:"3" help:"the threads of upload"`
+	Platform     string `json:"platform" type:"string" default:"web" help:"the platform header value, sent with API requests"`
 }
 
 var config = driver.Config{
@@ -22,6 +24,12 @@ var config = driver.Config{
 
 func init() {
 	op.RegisterDriver(func() driver.Driver {
-		return &Pan123{}
+		// 新增默认选项 要在RegisterDriver初始化设置 才会对正在使用的用户生效
+		return &Pan123{
+			Addition: Addition{
+				UploadThread: 3,
+				Platform: "web",
+			},
+		}
 	})
 }

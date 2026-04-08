@@ -47,7 +47,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: 'stable'
+          go-version: '1.25.0'
 
       - name: Cache Musl
         id: cache-musl
@@ -66,6 +66,7 @@ jobs:
         run: bash build.sh release docker-multiplatform
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FRONTEND_REPO: ${{ vars.FRONTEND_REPO }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -86,7 +87,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: 'stable'
+          go-version: '1.25.0'
 
       - name: Cache Musl
         id: cache-musl
@@ -105,6 +106,7 @@ jobs:
         run: bash build.sh release lite docker-multiplatform
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FRONTEND_REPO: ${{ vars.FRONTEND_REPO }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

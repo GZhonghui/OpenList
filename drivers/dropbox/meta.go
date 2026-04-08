@@ -14,7 +14,7 @@ type Addition struct {
 	UseAppFolder    bool   `json:"use_app_folder" default:"false" help:"Use app folder instead of root folder"`
 	AccessToken     string
 	RefreshToken    string `json:"refresh_token" required:"true"`
-	RootNamespaceId string
+	RootNamespaceId string `json:"RootNamespaceId" required:"false"`
 }
 
 var config = driver.Config{

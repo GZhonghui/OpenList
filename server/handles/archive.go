@@ -1,11 +1,10 @@
 package handles
 
 import (
-	"encoding/json"
 	"fmt"
+	"io"
 	stdpath "path"
-
-	"github.com/OpenListTeam/OpenList/v4/internal/task"
+	"strings"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/archive/tool"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
@@ -15,6 +14,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/internal/setting"
 	"github.com/OpenListTeam/OpenList/v4/internal/sign"
+	"github.com/OpenListTeam/OpenList/v4/internal/task"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/OpenListTeam/OpenList/v4/server/common"
 	"github.com/gin-gonic/gin"
@@ -71,13 +71,26 @@ func toContentResp(objs []model.ObjTree) []ArchiveContentResp {
 	return ret
 }
 
-func FsArchiveMeta(c *gin.Context) {
+func FsArchiveMetaSplit(c *gin.Context) {
 	var req ArchiveMetaReq
 	if err := c.ShouldBind(&req); err != nil {
 		common.ErrorResp(c, err, 400)
 		return
 	}
+	if strings.HasPrefix(req.Path, "/@s") {
+		req.Path = strings.TrimPrefix(req.Path, "/@s")
+		SharingArchiveMeta(c, &req)
+		return
+	}
 	user := c.Request.Context().Value(conf.UserKey).(*model.User)
+	if user.IsGuest() && user.Disabled {
+		common.ErrorStrResp(c, "Guest user is disabled, login please", 401)
+		return
+	}
+	FsArchiveMeta(c, &req, user)
+}
+
+func FsArchiveMeta(c *gin.Context, req *ArchiveMetaReq, user *model.User) {
 	if !user.CanReadArchives() {
 		common.ErrorResp(c, errs.PermissionDenied, 403)
 		return
@@ -142,19 +155,27 @@ type ArchiveListReq struct {
 	InnerPath string `json:"inner_path" form:"inner_path"`
 }
 
-type ArchiveListResp struct {
-	Content []ObjResp `json:"content"`
-	Total   int64     `json:"total"`
-}
-
-func FsArchiveList(c *gin.Context) {
+func FsArchiveListSplit(c *gin.Context) {
 	var req ArchiveListReq
 	if err := c.ShouldBind(&req); err != nil {
 		common.ErrorResp(c, err, 400)
 		return
 	}
 	req.Validate()
+	if strings.HasPrefix(req.Path, "/@s") {
+		req.Path = strings.TrimPrefix(req.Path, "/@s")
+		SharingArchiveList(c, &req)
+		return
+	}
 	user := c.Request.Context().Value(conf.UserKey).(*model.User)
+	if user.IsGuest() && user.Disabled {
+		common.ErrorStrResp(c, "Guest user is disabled, login please", 401)
+		return
+	}
+	FsArchiveList(c, &req, user)
+}
+
+func FsArchiveList(c *gin.Context, req *ArchiveListReq, user *model.User) {
 	if !user.CanReadArchives() {
 		common.ErrorResp(c, errs.PermissionDenied, 403)
 		return
@@ -201,36 +222,21 @@ func FsArchiveList(c *gin.Context) {
 	ret, _ := utils.SliceConvert(objs, func(src model.Obj) (ObjResp, error) {
 		return toObjsRespWithoutSignAndThumb(src), nil
 	})
-	common.SuccessResp(c, ArchiveListResp{
+	common.SuccessResp(c, common.PageResp{
 		Content: ret,
 		Total:   int64(total),
 	})
 }
 
-type StringOrArray []string
-
-func (s *StringOrArray) UnmarshalJSON(data []byte) error {
-	var value string
-	if err := json.Unmarshal(data, &value); err == nil {
-		*s = []string{value}
-		return nil
-	}
-	var sliceValue []string
-	if err := json.Unmarshal(data, &sliceValue); err != nil {
-		return err
-	}
-	*s = sliceValue
-	return nil
-}
-
 type ArchiveDecompressReq struct {
-	SrcDir        string        `json:"src_dir" form:"src_dir"`
-	DstDir        string        `json:"dst_dir" form:"dst_dir"`
-	Name          StringOrArray `json:"name" form:"name"`
-	ArchivePass   string        `json:"archive_pass" form:"archive_pass"`
-	InnerPath     string        `json:"inner_path" form:"inner_path"`
-	CacheFull     bool          `json:"cache_full" form:"cache_full"`
-	PutIntoNewDir bool          `json:"put_into_new_dir" form:"put_into_new_dir"`
+	SrcDir        string   `json:"src_dir" form:"src_dir"`
+	DstDir        string   `json:"dst_dir" form:"dst_dir"`
+	Name          []string `json:"name" form:"name"`
+	ArchivePass   string   `json:"archive_pass" form:"archive_pass"`
+	InnerPath     string   `json:"inner_path" form:"inner_path"`
+	CacheFull     bool     `json:"cache_full" form:"cache_full"`
+	PutIntoNewDir bool     `json:"put_into_new_dir" form:"put_into_new_dir"`
+	Overwrite     bool     `json:"overwrite" form:"overwrite"`
 }
 
 func FsArchiveDecompress(c *gin.Context) {
@@ -273,6 +279,7 @@ func FsArchiveDecompress(c *gin.Context) {
 			},
 			CacheFull:     req.CacheFull,
 			PutIntoNewDir: req.PutIntoNewDir,
+			Overwrite:     req.Overwrite,
 		})
 		if e != nil {
 			if errors.Is(e, errs.WrongArchivePassword) {
@@ -298,7 +305,7 @@ func ArchiveDown(c *gin.Context) {
 	filename := stdpath.Base(innerPath)
 	storage, err := fs.GetStorage(archiveRawPath, &fs.GetStoragesArgs{})
 	if err != nil {
-		common.ErrorResp(c, err, 500)
+		common.ErrorPage(c, err, 500)
 		return
 	}
 	if common.ShouldProxy(storage, filename) {
@@ -318,7 +325,7 @@ func ArchiveDown(c *gin.Context) {
 			InnerPath: innerPath,
 		})
 		if err != nil {
-			common.ErrorResp(c, err, 500)
+			common.ErrorPage(c, err, 500)
 			return
 		}
 		redirect(c, link)
@@ -332,7 +339,7 @@ func ArchiveProxy(c *gin.Context) {
 	filename := stdpath.Base(innerPath)
 	storage, err := fs.GetStorage(archiveRawPath, &fs.GetStoragesArgs{})
 	if err != nil {
-		common.ErrorResp(c, err, 500)
+		common.ErrorPage(c, err, 500)
 		return
 	}
 	if canProxy(storage, filename) {
@@ -348,14 +355,32 @@ func ArchiveProxy(c *gin.Context) {
 			InnerPath: innerPath,
 		})
 		if err != nil {
-			common.ErrorResp(c, err, 500)
+			common.ErrorPage(c, err, 500)
 			return
 		}
 		proxy(c, link, file, storage.GetStorage().ProxyRange)
 	} else {
-		common.ErrorStrResp(c, "proxy not allowed", 403)
+		common.ErrorPage(c, errors.New("proxy not allowed"), 403)
 		return
 	}
+}
+
+func proxyInternalExtract(c *gin.Context, rc io.ReadCloser, size int64, fileName string) {
+	defer func() {
+		if err := rc.Close(); err != nil {
+			log.Errorf("failed to close file streamer, %v", err)
+		}
+	}()
+	headers := map[string]string{
+		"Referrer-Policy": "no-referrer",
+		"Cache-Control":   "max-age=0, no-cache, no-store, must-revalidate",
+	}
+	headers["Content-Disposition"] = utils.GenerateContentDisposition(fileName)
+	contentType := c.Request.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = utils.GetMimeType(fileName)
+	}
+	c.DataFromReader(200, size, contentType, rc, headers)
 }
 
 func ArchiveInternalExtract(c *gin.Context) {
@@ -373,25 +398,11 @@ func ArchiveInternalExtract(c *gin.Context) {
 		InnerPath: innerPath,
 	})
 	if err != nil {
-		common.ErrorResp(c, err, 500)
+		common.ErrorPage(c, err, 500)
 		return
 	}
-	defer func() {
-		if err := rc.Close(); err != nil {
-			log.Errorf("failed to close file streamer, %v", err)
-		}
-	}()
-	headers := map[string]string{
-		"Referrer-Policy": "no-referrer",
-		"Cache-Control":   "max-age=0, no-cache, no-store, must-revalidate",
-	}
 	fileName := stdpath.Base(innerPath)
-	headers["Content-Disposition"] = utils.GenerateContentDisposition(fileName)
-	contentType := c.Request.Header.Get("Content-Type")
-	if contentType == "" {
-		contentType = utils.GetMimeType(fileName)
-	}
-	c.DataFromReader(200, size, contentType, rc, headers)
+	proxyInternalExtract(c, rc, size, fileName)
 }
 
 func ArchiveExtensions(c *gin.Context) {
